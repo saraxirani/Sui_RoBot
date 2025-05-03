@@ -549,7 +549,7 @@ async function promptUser(question) {
 
   try {
     return new Promise((resolve) => {
-      rl.question(question, (answer) => {
+      rl.question(`${SYMBOLS.info} ${question} `, (answer) => {
         rl.close();
         resolve(answer.trim());
       });
@@ -565,20 +565,61 @@ async function main() {
   logger.info("SUI Allowlist Bot");
   logger.divider();
   
-  // Create readline interface at the beginning and only close it at the end
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+  // Check if running in CI environment (GitHub Actions, etc.)
+  const isCI = process.env.CI === 'true' || 
+               process.env.GITHUB_ACTIONS === 'true' || 
+               process.env.GITHUB_WORKFLOW !== undefined ||
+               process.env.RUNNER_OS !== undefined;
   
-  // Define prompting function
-  const promptUser = (question) => {
-    return new Promise((resolve) => {
-      rl.question(`${SYMBOLS.info} ${question} `, (answer) => {
-        resolve(answer);
-      });
-    });
-  };
+  // Check if running in non-interactive mode via command-line arguments
+  const args = process.argv.slice(2);
+  const isNonInteractive = isCI || args.includes('--non-interactive') || args.includes('-n');
+  
+  // Force non-interactive mode if in a CI environment
+  if (isCI && !isNonInteractive) {
+    logger.warning('CI environment detected but non-interactive mode not specified. Forcing non-interactive mode.');
+  }
+  
+  let options = {};
+  
+  // Parse command-line arguments if in non-interactive mode
+  if (isNonInteractive) {
+    logger.info(`Running in non-interactive mode ${isCI ? '(CI environment detected)' : 'with command-line arguments'}`);
+    
+    // Default options
+    options = {
+      useAllWallets: true,
+      action: '1', // Default to allowlist workflow
+      imageSource: DEFAULT_IMAGE_URL,
+      taskCount: 1,
+      additionalAddresses: []
+    };
+    
+    // Parse arguments
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--action' || args[i] === '-a') {
+        options.action = args[i + 1];
+        i++;
+      } else if (args[i] === '--image' || args[i] === '-i') {
+        options.imageSource = args[i + 1];
+        i++;
+      } else if (args[i] === '--count' || args[i] === '-c') {
+        options.taskCount = parseInt(args[i + 1], 10);
+        i++;
+      } else if (args[i] === '--addresses' || args[i] === '-addr') {
+        options.additionalAddresses = args[i + 1].split(',').map(addr => addr.trim()).filter(addr => addr);
+        i++;
+      }
+    }
+    
+    logger.info("Using the following options:");
+    logger.result("Action", options.action === '1' ? "Create Allowlist" : "Service Subscription");
+    logger.result("Image Source", options.imageSource);
+    logger.result("Task Count", options.taskCount);
+    if (options.additionalAddresses.length > 0) {
+      logger.result("Additional Addresses", options.additionalAddresses.join(", "));
+    }
+  }
   
   try {
     const walletPath = path.join(__dirname, 'wallets.txt');
@@ -599,69 +640,95 @@ async function main() {
     // Handle wallet selection
     let wallets = [];
     
-    if (walletManager.hasWallets()) {
-      const useMultipleWallets = await promptUser('\nMultiple wallets detected. Use them? (y/n): ');
-      if (useMultipleWallets.toLowerCase() === 'y') {
-        wallets = walletManager.getWallets();
-        logger.info(`Using ${wallets.length} wallets from wallets.txt`);
-      }
-    }
-    
-    if (wallets.length === 0) {
-      if (!fs.existsSync(pkPath)) {
-        logger.error('No wallet found. Please create pk.txt with your passphrase or wallets.txt for multiple wallets.');
-        return;
-      }
-      const passphrase = fs.readFileSync(pkPath, 'utf8').trim();
-      wallets = [passphrase];
-      logger.info('Using single wallet from pk.txt');
-    }
-    
-    // Choose action
-    logger.divider();
-    console.log('Choose action:');
-    console.log('1. Create Allowlist and Publish Blob');
-    console.log('2. Create Service Subscription and Upload Blob');
-    const choice = await promptUser('Enter choice (1 or 2): ');
-    
-    // Choose image source
-    let imageSource;
-    logger.divider();
-    console.log('Image source options:');
-    console.log('1. Use URL (default: https://picsum.photos/100/100)');
-    console.log('2. Use local file (image.jpg in script directory)');
-    const imageChoice = await promptUser('Choose image source (1 or 2): ');
-
-    if (imageChoice === '2') {
-      if (!fs.existsSync(LOCAL_IMAGE_PATH)) {
-        logger.error('Error: image.jpg not found in script directory.');
-        return;
-      }
-      imageSource = LOCAL_IMAGE_PATH;
-      logger.info('Using local image.jpg');
+    if (isNonInteractive) {
+      // In non-interactive mode, use all wallets by default
+      wallets = walletManager.getWallets();
+      logger.info(`Using ${wallets.length} wallets from wallets.txt`);
     } else {
-      imageSource = await promptUser('Enter image URL (or press Enter for default): ') || DEFAULT_IMAGE_URL;
-      logger.info(`Using image URL: ${imageSource}`);
-    }
-    
-    // Get task count
-    const countInput = await promptUser('Enter number of tasks per wallet (default 1): ');
-    let count = parseInt(countInput || '1', 10);
-    if (isNaN(count) || count < 1) {
-      logger.warning('Invalid number. Using default value of 1.');
-      count = 1;
-    }
-    
-    // Get additional addresses if needed
-    let additionalAddresses = [];
-    if (choice === '1') {
-      const addressesInput = await promptUser('Enter additional addresses to add to allowlist (comma-separated, or press Enter for none): ');
-      if (addressesInput.trim()) {
-        additionalAddresses = addressesInput
-          .split(',')
-          .map(addr => addr.trim())
-          .filter(addr => addr);
-        logger.info(`Will add ${additionalAddresses.length} additional addresses to each allowlist`);
+      // Interactive mode - only run this in non-CI environment
+      // Create a new block to isolate readline scope
+      if (!isCI) {
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        
+        try {
+          const promptUser = (question) => {
+            return new Promise((resolve) => {
+              rl.question(`${SYMBOLS.info} ${question} `, (answer) => {
+                resolve(answer);
+              });
+            });
+          };
+          
+          if (walletManager.hasWallets()) {
+            const useMultipleWallets = await promptUser('\nMultiple wallets detected. Use them? (y/n): ');
+            if (useMultipleWallets.toLowerCase() === 'y') {
+              wallets = walletManager.getWallets();
+              logger.info(`Using ${wallets.length} wallets from wallets.txt`);
+            }
+          }
+          
+          if (wallets.length === 0) {
+            if (!fs.existsSync(pkPath)) {
+              logger.error('No wallet found. Please create pk.txt with your passphrase or wallets.txt for multiple wallets.');
+              return;
+            }
+            const passphrase = fs.readFileSync(pkPath, 'utf8').trim();
+            wallets = [passphrase];
+            logger.info('Using single wallet from pk.txt');
+          }
+          
+          // Choose action
+          logger.divider();
+          console.log('Choose action:');
+          console.log('1. Create Allowlist and Publish Blob');
+          console.log('2. Create Service Subscription and Upload Blob');
+          options.action = await promptUser('Enter choice (1 or 2): ');
+          
+          // Choose image source
+          logger.divider();
+          console.log('Image source options:');
+          console.log(`1. Use URL (default: ${DEFAULT_IMAGE_URL})`);
+          console.log('2. Use local file (image.jpg in script directory)');
+          const imageChoice = await promptUser('Choose image source (1 or 2): ');
+
+          if (imageChoice === '2') {
+            if (!fs.existsSync(LOCAL_IMAGE_PATH)) {
+              logger.error('Error: image.jpg not found in script directory.');
+              return;
+            }
+            options.imageSource = LOCAL_IMAGE_PATH;
+            logger.info('Using local image.jpg');
+          } else {
+            options.imageSource = await promptUser('Enter image URL (or press Enter for default): ') || DEFAULT_IMAGE_URL;
+            logger.info(`Using image URL: ${options.imageSource}`);
+          }
+          
+          // Get task count
+          const countInput = await promptUser('Enter number of tasks per wallet (default 1): ');
+          options.taskCount = parseInt(countInput || '1', 10);
+          if (isNaN(options.taskCount) || options.taskCount < 1) {
+            logger.warning('Invalid number. Using default value of 1.');
+            options.taskCount = 1;
+          }
+          
+          // Get additional addresses if needed
+          if (options.action === '1') {
+            const addressesInput = await promptUser('Enter additional addresses to add to allowlist (comma-separated, or press Enter for none): ');
+            if (addressesInput.trim()) {
+              options.additionalAddresses = addressesInput
+                .split(',')
+                .map(addr => addr.trim())
+                .filter(addr => addr);
+              logger.info(`Will add ${options.additionalAddresses.length} additional addresses to each allowlist`);
+            }
+          }
+        } finally {
+          // Close readline interface after all prompts
+          rl.close();
+        }
       }
     }
     
@@ -673,9 +740,9 @@ async function main() {
       const bot = new SuiAllowlistBot(wallets[i], proxyManager);
       logger.wallet(`Wallet address: ${bot.getAddress()}`);
       
-      if (choice === '1') {
-        logger.info(`Starting allowlist workflow (${count} tasks)`);
-        const results = await bot.runAllowlistWorkflow(imageSource, additionalAddresses, count);
+      if (options.action === '1') {
+        logger.info(`Starting allowlist workflow (${options.taskCount} tasks)`);
+        const results = await bot.runAllowlistWorkflow(options.imageSource, options.additionalAddresses, options.taskCount);
         
         logger.divider();
         logger.success(`Wallet ${i+1} summary:`);
@@ -685,9 +752,9 @@ async function main() {
           logger.result('Entry ID', result.entryObjectId);
           logger.result('Blob ID', result.blobId);
         });
-      } else if (choice === '2') {
-        logger.info(`Starting service subscription workflow (${count} tasks)`);
-        const results = await bot.runServiceSubscriptionWorkflow(imageSource, count);
+      } else if (options.action === '2') {
+        logger.info(`Starting service subscription workflow (${options.taskCount} tasks)`);
+        const results = await bot.runServiceSubscriptionWorkflow(options.imageSource, options.taskCount);
         
         logger.divider(); 
         logger.success(`Wallet ${i+1} summary:`);
@@ -710,9 +777,6 @@ async function main() {
     if (error.stack) {
       logger.error(`Stack trace: ${error.stack}`);
     }
-  } finally {
-    // Always close readline and exit properly
-    rl.close();
   }
 }
 
