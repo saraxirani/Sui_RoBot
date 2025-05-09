@@ -22,7 +22,7 @@ const PUBLISHER_URLS = [
   'https://seal-example.vercel.app/publisher5/v1/blobs',
   'https://seal-example.vercel.app/publisher6/v1/blobs',
 ];
-const WEBSHARE_API_KEY = 't6sfb2tboy68vvwizzqkz40ogz5sk0l3dxo5og35';
+const WEBSHARE_API_KEY = '0413158394c9091d3d9b8adcbe6edec59bccab70';
 const WEBSHARE_API_URL = 'https://proxy.webshare.io/api/proxy/list/';
 const SYMBOLS = {
   info: '📌',
